@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Snake</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --body: #2f3a45;
+    --body-edge: #1f2730;
+    --lcd: #b7c98b;
+    --pixel: #26331a;
+    --ghost: rgba(38, 51, 26, .12);
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #14191f;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Press Start 2P", "Courier New", monospace;
+    color: var(--pixel);
+    padding: 12px;
+  }
+  .phone {
+    background: linear-gradient(160deg, var(--body), var(--body-edge));
+    border-radius: 36px 36px 48px 48px;
+    padding: 26px 22px 30px;
+    width: min(100%, 380px);
+    box-shadow: inset 0 0 0 3px #3d4a57, 0 20px 50px rgba(0,0,0,.55);
+  }
+  .brand { text-align: center; color: #8fa0b0; font-size: 9px; margin-bottom: 14px; }
+  .lcd {
+    background: var(--lcd);
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: inset 0 0 0 3px #8da069, inset 0 4px 10px rgba(0,0,0,.35);
+  }
+  .bar { display: flex; justify-content: space-between; font-size: 9px; margin-bottom: 8px; }
+  .bar b { font-weight: normal; }
+  .field { position: relative; }
+  canvas {
+    display: block; width: 100%; height: auto;
+    border: 3px solid var(--pixel);
+    image-rendering: pixelated;
+    touch-action: none;
+  }
+  .msg {
+    position: absolute; inset: 3px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px;
+    background: rgba(183, 201, 139, .92); text-align: center; font-size: 11px;
+    line-height: 1.6; padding: 12px; cursor: pointer;
+  }
+  .msg.hide { display: none; }
+  .msg small { font-size: 8px; line-height: 1.8; }
+  .controls { display: flex; justify-content: center; gap: 10px; margin-top: 18px; }
+  .controls button {
+    font: inherit; font-size: 9px; color: #c9d4de; background: #3a4754;
+    border: 0; border-radius: 6px; padding: 10px 14px; cursor: pointer;
+    box-shadow: 0 3px 0 #1f2730;
+  }
+  .controls button:focus-visible { outline: 2px solid #b7c98b; outline-offset: 2px; }
+  .controls button:active { transform: translateY(2px); box-shadow: 0 1px 0 #1f2730; }
+</style>
+</head>
+<body>
+  <div class="phone">
+    <div class="brand">SNAKE</div>
+    <div class="lcd">
+      <div class="bar"><span>Score <b id="score">0</b></span><span>Hi <b id="hi">0</b></span></div>
+      <div class="field">
+        <canvas id="c" width="320" height="320" aria-label="Snake game board"></canvas>
+        <div class="msg" id="msg" tabindex="0" role="button">
+          <div id="msgTitle">SNAKE</div>
+          <small id="msgText">Press any arrow key, or tap, to start</small>
+        </div>
+      </div>
+    </div>
+    <div class="controls">
+      <button id="pauseBtn">Pause</button>
+      <button id="soundBtn">Sound: on</button>
+    </div>
+  </div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const N = 16, CELL = canvas.width / N;
+const PIXEL = '#26331a';
+
+const scoreEl = document.getElementById('score');
+const hiEl = document.getElementById('hi');
+const msg = document.getElementById('msg');
+const msgTitle = document.getElementById('msgTitle');
+const msgText = document.getElementById('msgText');
+const pauseBtn = document.getElementById('pauseBtn');
+const soundBtn = document.getElementById('soundBtn');
+
+let snake, dir, queue, food, score, hi = 0, state = 'ready', tickMs, timer, sound = true;
+try { hi = parseInt(localStorage.getItem('snake-hi') || '0', 10) || 0; } catch (e) {}
+hiEl.textContent = hi;
+
+// --- sound: tiny square-wave beeps ---
+let audio;
+function beep(freq, dur) {
+  if (!sound) return;
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = 'square'; o.frequency.value = freq;
+    g.gain.value = 0.04;
+    o.connect(g); g.connect(audio.destination);
+    o.start(); o.stop(audio.currentTime + dur);
+  } catch (e) {}
+}
+
+function init() {
+  snake = [{ x: 5, y: 8 }, { x: 4, y: 8 }, { x: 3, y: 8 }];
+  dir = { x: 1, y: 0 }; queue = [];
+  score = 0; tickMs = 150;
+  scoreEl.textContent = 0;
+  placeFood();
+  draw();
+}
+
+function placeFood() {
+  const free = [];
+  for (let x = 0; x < N; x++) for (let y = 0; y < N; y++)
+    if (!snake.some(s => s.x === x && s.y === y)) free.push({ x, y });
+  food = free[Math.floor(Math.random() * free.length)];
+}
+
+function start() {
+  if (state === 'over' || state === 'ready') init();
+  state = 'play';
+  msg.classList.add('hide');
+  pauseBtn.textContent = 'Pause';
+  clearInterval(timer);
+  timer = setInterval(step, tickMs);
+}
+
+function pause() {
+  if (state === 'play') {
+    state = 'paused'; clearInterval(timer);
+    msgTitle.textContent = 'PAUSED'; msgText.textContent = 'Press space or tap to resume';
+    msg.classList.remove('hide'); pauseBtn.textContent = 'Resume';
+  } else if (state === 'paused') start();
+}
+
+function turn(nx, ny) {
+  const last = queue.length ? queue[queue.length - 1] : dir;
+  if (nx === -last.x && ny === -last.y) return;   // no reversing
+  if (nx === last.x && ny === last.y) return;
+  if (queue.length < 2) queue.push({ x: nx, y: ny });
+}
+
+function step() {
+  if (queue.length) dir = queue.shift();
+  const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+  const eating = head.x === food.x && head.y === food.y;
+  const body = eating ? snake : snake.slice(0, -1);
+  const hitWall = head.x < 0 || head.y < 0 || head.x >= N || head.y >= N;
+  if (hitWall || body.some(s => s.x === head.x && s.y === head.y)) return gameOver();
+
+  snake.unshift(head);
+  if (eating) {
+    score += 10; scoreEl.textContent = score;
+    beep(880, 0.08);
+    if (snake.length === N * N) return gameOver(true);
+    placeFood();
+    if (tickMs > 70) {                          // speed up a little each bite
+      tickMs -= 4; clearInterval(timer); timer = setInterval(step, tickMs);
+    }
+  } else snake.pop();
+  draw();
+}
+
+function gameOver(won) {
+  clearInterval(timer); state = 'over';
+  beep(160, 0.35);
+  draw();
+  if (score > hi) {
+    hi = score; hiEl.textContent = hi;
+    try { localStorage.setItem('snake-hi', String(hi)); } catch (e) {}
+  }
+  msgTitle.textContent = won ? 'YOU WIN!' : 'GAME OVER';
+  msgText.textContent = 'Score ' + score + '. Press any arrow key, or tap, to play again';
+  msg.classList.remove('hide');
+}
+
+function block(x, y, inset) {
+  const p = CELL * inset;
+  ctx.fillRect(x * CELL + p, y * CELL + p, CELL - 2 * p, CELL - 2 * p);
+}
+
+function draw() {
+  ctx.fillStyle = '#b7c98b'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // faint LCD grid
+  ctx.fillStyle = 'rgba(38,51,26,.07)';
+  for (let x = 0; x < N; x++) for (let y = 0; y < N; y++) block(x, y, 0.42);
+  ctx.fillStyle = PIXEL;
+  // food: small diamond-ish plus shape
+  const fx = food.x * CELL, fy = food.y * CELL, q = CELL / 4;
+  ctx.fillRect(fx + q, fy + 1, q * 2, CELL - 2);
+  ctx.fillRect(fx + 1, fy + q, CELL - 2, q * 2);
+  snake.forEach((s, i) => block(s.x, s.y, i === 0 ? 0.06 : 0.1));
+}
+
+// --- input ---
+const KEYS = {
+  ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+  w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0]
+};
+window.addEventListener('keydown', e => {
+  const k = KEYS[e.key] || KEYS[e.key.toLowerCase()];
+  if (k) {
+    e.preventDefault();
+    if (state === 'ready' || state === 'over') {
+      start();
+    } else if (state === 'paused') start();
+    turn(k[0], k[1]);
+  } else if (e.key === ' ' || e.key === 'p') {
+    e.preventDefault();
+    if (state === 'ready' || state === 'over') start(); else pause();
+  }
+});
+
+msg.addEventListener('click', () => { if (state === 'paused') start(); else start(); });
+pauseBtn.addEventListener('click', () => { if (state === 'play' || state === 'paused') pause(); });
+soundBtn.addEventListener('click', () => {
+  sound = !sound; soundBtn.textContent = 'Sound: ' + (sound ? 'on' : 'off');
+});
+
+// swipe on touch devices
+let t0 = null;
+canvas.addEventListener('touchstart', e => { t0 = e.touches[0]; }, { passive: true });
+canvas.addEventListener('touchend', e => {
+  if (!t0) return;
+  const t = e.changedTouches[0], dx = t.clientX - t0.clientX, dy = t.clientY - t0.clientY;
+  t0 = null;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 20) return;
+  if (state !== 'play') start();
+  if (Math.abs(dx) > Math.abs(dy)) turn(dx > 0 ? 1 : -1, 0); else turn(0, dy > 0 ? 1 : -1);
+});
+
+init();
+</script>
+</body>
+</html>
